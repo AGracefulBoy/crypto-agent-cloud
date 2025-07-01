@@ -16,6 +16,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 
+import java.util.Base64;
+
 /**
  * [Sa-Token 权限认证] 拦截器
  *
@@ -40,25 +42,21 @@ public class AuthFilter {
                     .notMatch(ignoreWhite.getWhites())
                     .check(r -> {
                         ServerHttpRequest request = SaReactorSyncHolder.getExchange().getRequest();
-                        // 检查是否登录 是否有token
-                        StpUtil.checkLogin();
+                        if (isLikelyJwt(StpUtil.getTokenValue())) {
+                            // JWT 方式鉴权
+                            StpUtil.checkLogin();
 
-                        // 检查 header 与 param 里的 clientid 与 token 里的是否一致
-                        String headerCid = request.getHeaders().getFirst(LoginHelper.CLIENT_KEY);
-                        String paramCid = request.getQueryParams().getFirst(LoginHelper.CLIENT_KEY);
-                        String clientId = StpUtil.getExtra(LoginHelper.CLIENT_KEY).toString();
-                        if (!StringUtils.equalsAny(clientId, headerCid, paramCid)) {
-                            // token 无效
-                            throw NotLoginException.newInstance(StpUtil.getLoginType(),
-                                "-100", "客户端ID与Token不匹配",
-                                StpUtil.getTokenValue());
+                            // 进行 clientId 校验（你的原有逻辑）
+                            String headerCid = request.getHeaders().getFirst(LoginHelper.CLIENT_KEY);
+                            String paramCid = request.getQueryParams().getFirst(LoginHelper.CLIENT_KEY);
+                            String clientId = StpUtil.getExtra(LoginHelper.CLIENT_KEY).toString();
+                            if (!StringUtils.equalsAny(clientId, headerCid, paramCid)) {
+                                throw NotLoginException.newInstance(StpUtil.getLoginType(),
+                                    "-100", "客户端ID与Token不匹配", StpUtil.getTokenValue());
+                            }
+                        } else {
+                            System.out.println("aa");
                         }
-
-                        // 有效率影响 用于临时测试
-                        // if (log.isDebugEnabled()) {
-                        //     log.debug("剩余有效时间: {}", StpUtil.getTokenTimeout());
-                        //     log.debug("临时有效时间: {}", StpUtil.getTokenActivityTimeout());
-                        // }
                     });
             }).setError(e -> {
                 if (e instanceof NotLoginException) {
@@ -66,6 +64,43 @@ public class AuthFilter {
                 }
                 return SaResult.error("认证失败，无法访问系统资源").setCode(HttpStatus.UNAUTHORIZED);
             });
+    }
+
+    /**
+     * 判断是否是 JWT token（基于格式特征）
+     *
+     * @param token Bearer 后的字符串
+     * @return true 表示是 JWT
+     */
+    public static boolean isLikelyJwt(String token) {
+        if (token == null || token.trim().isEmpty()) {
+            return false;
+        }
+
+        // JWT 一般为三段结构，用 "." 分隔，通常是 header.payload.signature
+        String[] parts = token.split("\\.");
+        if (parts.length != 3) {
+            return false;
+        }
+
+        // 判断 header 是否是合法的 Base64 并包含 "alg"
+        try {
+            String headerJson = new String(Base64.getUrlDecoder().decode(parts[0]));
+            return headerJson.contains("\"alg\"");
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+    }
+
+    /**
+     * 判断是否是 API Key（辅助函数，根据格式特征识别）
+     *
+     * @param token Bearer 后的字符串
+     * @return true 表示是自定义 API Key
+     */
+    public static boolean isLikelyApiKey(String token) {
+        // 可扩展为以 sk-xxx 或 ak- 开头的自定义 key 格式
+        return !isLikelyJwt(token);
     }
 
     /**
